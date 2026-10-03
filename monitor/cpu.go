@@ -3,7 +3,6 @@ package monitor
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -122,9 +121,9 @@ func (cpu *CPU) getCPUDynamicInfo() {
 	cpu.cpuDynamic.utilization, cpu.error = getCPUUtilization(cpu.cpuFilePaths.cpuDynamicPath, &cpu.cpuDynamic.cpuUtilSampler)
 }
 
-// //////////////////////////////
-// ** CPU helper functions ** //
-// /////////////////////////////
+// //////////////////////////////////
+// ** CPU Utilization functions ** //
+// //////////////////////////////////
 
 // Calculates the CPU utilization from the file specified in cpuInfoPath.
 // Returns the CPU utilization as a float64 value and an error if any occurred during the reading process.
@@ -157,32 +156,59 @@ func getCPUUtilization(path string, sampler *cpuUtilSampler) (float64, error) {
 	return math.Round(utilization*100) / 100, nil
 }
 
-// Reads the CPU statistics from the file specified in cpuInfoPath (/proc/stat). Returns the total and idle CPU time as uint64 values and an error if any occurred during the reading process.
+// Reads and sums the aggregate CPU counters; idle includes iowait.
 func readCPUUtilization(path string) (uint64, uint64, error) {
-	file, err := lib.GetFile(path)
+	fields, err := readCPUStatsLine(path, "cpu")
 	if err != nil {
 		return 0, 0, err
+	}
+	return parseCPUUtilizationFields(fields)
+}
+
+// Reads and sums counters for the requested CPU core; idle includes iowait.
+func readCPUCoreUtilization(path string, coreNumber int) (uint64, uint64, error) {
+	if coreNumber < 0 {
+		return 0, 0, fmt.Errorf("CPU core number must not be negative")
+	}
+
+	label := "cpu" + strconv.Itoa(coreNumber)
+	fields, err := readCPUStatsLine(path, label)
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseCPUUtilizationFields(fields)
+}
+
+// Reads the /proc/stat row matching label and returns its whitespace-separated fields.
+func readCPUStatsLine(path string, label string) ([]string, error) {
+	file, err := lib.GetFile(path)
+	if err != nil {
+		return nil, err
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return 0, 0, err
+	// Find the aggregate row (`cpu`) or the selected per-core row (`cpuN`).
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) > 0 && fields[0] == label {
+			return fields, nil
+		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("CPU stats for %s not found in %s", label, path)
+}
 
-	// The first line of /proc/stat contains the aggregate CPU statistics.
-	// It is split into fields, and the total and idle CPU time are calculated from these fields.
-	var line string = strings.SplitN(string(data), "\n", 2)[0]
-	var fields []string = strings.Fields(line)
-
-	if len(fields) < 5 || fields[0] != "cpu" {
-		return 0, 0, fmt.Errorf("invalid aggregate CPU stats in %s", path)
+// Sums the standard CPU counters, treating idle and iowait as idle time.
+func parseCPUUtilizationFields(fields []string) (uint64, uint64, error) {
+	if len(fields) < 5 {
+		return 0, 0, fmt.Errorf("invalid CPU stats")
 	}
 
 	var total uint64
 	var idle uint64
-
-	// Sum the standard CPU counters; idle and iowait are counted as idle time.
 	for index, field := range fields[1:] {
 		if index >= 8 {
 			break
