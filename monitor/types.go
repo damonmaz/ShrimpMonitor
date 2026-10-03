@@ -1,5 +1,9 @@
 package monitor
 
+import (
+	"time"
+)
+
 // ** File Paths ** //
 
 type cpuFilePaths struct {
@@ -34,7 +38,7 @@ type cpuDynamic struct {
 }
 
 type cpuDynamicCore struct {
-	number         int
+	label          int
 	utilization    float64
 	frequencyMHz   float64
 	cpuUtilSampler cpuUtilSampler
@@ -55,3 +59,6 @@ type Monitor struct {
 	cpu CPU
 	mem Memory
 }
+
+// Constants
+var TICKER_TIME = 500 * time.Millisecond

@@ -27,7 +27,8 @@ func initCPUMonitor(operatingSystem string) CPU {
 		cpu.cpuFilePaths.cpuDynamicPath = "/proc/stat"             // dynamic CPU info file path
 		cpu.cpuFilePaths.cpuCoresPath = "/sys/devices/system/cpu/" // default Linux core info file paths
 	default:
-		fmt.Printf("Operating system %s is not supported\n", operatingSystem)
+		cpu.error = fmt.Errorf("Operating system %s is not supported", operatingSystem)
+		return cpu
 	}
 
 	// Get static CPU info
@@ -40,8 +41,11 @@ func initCPUMonitor(operatingSystem string) CPU {
 func startCPUMonitor(cpu *CPU) {
 	// Record an initial baseline; subsequent ticker events produce utilization samples.
 	cpu.getCPUDynamicInfo()
-	ticker := time.NewTicker(time.Second)
+
+	ticker := time.NewTicker(TICKER_TIME)
 	defer ticker.Stop()
+
+	// Start a loop that will run every 500 milliseconds to get dynamic CPU info
 	for range ticker.C {
 		cpu.getCPUDynamicInfo()
 		fmt.Printf("CPU Info: %+v\n", cpu)
@@ -65,6 +69,7 @@ func (cpu *CPU) getCPUStaticInfo() {
 	physicalCores := make(map[string]struct{})
 	physicalIDs := make(map[string]struct{})
 	var fallbackCores uint
+	cpu.cpuDynamic.cores = nil
 	scanner := bufio.NewScanner(file)
 	var physicalID string
 	for scanner.Scan() {
@@ -82,7 +87,14 @@ func (cpu *CPU) getCPUStaticInfo() {
 				cpu.cpuStatic.name = value
 			}
 		case "processor":
+			label, err := strconv.Atoi(value)
+			if err != nil {
+				cpu.error = err
+				return
+			}
 			cpu.cpuStatic.threads++
+			// Create one dynamic core entry per logical processor, initializing only its label.
+			cpu.cpuDynamic.cores = append(cpu.cpuDynamic.cores, cpuDynamicCore{label: label})
 		case "physical id":
 			physicalID = value
 			physicalIDs[value] = struct{}{}
@@ -118,7 +130,24 @@ func (cpu *CPU) getCPUStaticInfo() {
 
 // Reads the dynamic information about the CPU from the files specified in cpuFilePaths.
 func (cpu *CPU) getCPUDynamicInfo() {
-	cpu.cpuDynamic.utilization, cpu.error = getCPUUtilization(cpu.cpuFilePaths.cpuDynamicPath, &cpu.cpuDynamic.cpuUtilSampler)
+	var path string = cpu.cpuFilePaths.cpuDynamicPath
+	var err error
+	cpu.cpuDynamic.utilization, err = getCPUUtilization(path, &cpu.cpuDynamic.cpuUtilSampler)
+	if err != nil {
+		cpu.error = err
+		return
+	}
+
+	// Sample each logical core using its own previous-counter baseline.
+	for index := range cpu.cpuDynamic.cores {
+		var core *cpuDynamicCore = &cpu.cpuDynamic.cores[index]
+		core.utilization, err = getCPUCoreUtilization(path, core.label, &core.cpuUtilSampler)
+		if err != nil {
+			cpu.error = err
+			return
+		}
+	}
+	cpu.error = nil
 }
 
 // //////////////////////////////////
@@ -134,13 +163,26 @@ func getCPUUtilization(path string, sampler *cpuUtilSampler) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return calculateCPUUtilization(total, idle, sampler), nil
+}
 
+// Calculates utilization from one core's counters and its previous sample.
+func getCPUCoreUtilization(path string, coreNumber int, sampler *cpuUtilSampler) (float64, error) {
+	total, idle, err := readCPUCoreUtilization(path, coreNumber)
+	if err != nil {
+		return 0, err
+	}
+	return calculateCPUUtilization(total, idle, sampler), nil
+}
+
+// Updates the counter baseline and returns utilization for the interval since the previous sample.
+func calculateCPUUtilization(total uint64, idle uint64, sampler *cpuUtilSampler) float64 {
 	// The first reading is only a baseline, so it cannot produce a delta yet.
 	if !sampler.initialized {
 		sampler.previousTotal = total
 		sampler.previousIdle = idle
 		sampler.initialized = true
-		return 0, nil
+		return 0
 	}
 
 	// Refresh the baseline on every call so the next call measures a new interval.
@@ -149,11 +191,11 @@ func getCPUUtilization(path string, sampler *cpuUtilSampler) (float64, error) {
 	sampler.previousTotal = total
 	sampler.previousIdle = idle
 	if totalDelta == 0 {
-		return 0, nil
+		return 0
 	}
 
 	utilization := float64(totalDelta-idleDelta) / float64(totalDelta) * 100
-	return math.Round(utilization*100) / 100, nil
+	return math.Round(utilization*100) / 100
 }
 
 // Reads and sums the aggregate CPU counters; idle includes iowait.
@@ -190,7 +232,7 @@ func readCPUStatsLine(path string, label string) ([]string, error) {
 	// Find the aggregate row (`cpu`) or the selected per-core row (`cpuN`).
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
+		var fields []string = strings.Fields(scanner.Text())
 		if len(fields) > 0 && fields[0] == label {
 			return fields, nil
 		}
