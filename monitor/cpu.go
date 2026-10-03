@@ -11,6 +11,13 @@ import (
 	"github.com/damonmaz/shrimp-monitor/lib"
 )
 
+func startCPUMonitor(cpuFilePaths cpuFilePaths) {
+	for {
+		var cpuInfo CPU = getCPUInfo(cpuFilePaths)
+		fmt.Printf("CPU Info: %+v\n", cpuInfo)
+	}
+}
+
 // Reads the information about the CPU and CPU cores from the files specified in the cpuFilePaths struct. Returns a CPU struct containing the information read from the files.
 func getCPUInfo(cpuFilePaths cpuFilePaths) CPU {
 
@@ -28,7 +35,8 @@ func getCPUInfo(cpuFilePaths cpuFilePaths) CPU {
 	return cpu
 }
 
-// Reads the CPU utilization from the /proc/stat file specified in cpuInfoPath. Returns the CPU utilization as a float64 value and an error if any occurred during the reading process.
+// Calculates the CPU utilization from the file specified in cpuInfoPath.
+// Returns the CPU utilization as a float64 value and an error if any occurred during the reading process.
 func getCPUUtilization(cpuInfoPath string) (float64, error) {
 	firstTotal, firstIdle, err := readCPUUtilization(cpuInfoPath)
 	if err != nil {
@@ -66,8 +74,9 @@ func readCPUUtilization(cpuInfoPath string) (uint64, uint64, error) {
 
 	// The first line of /proc/stat contains the aggregate CPU statistics.
 	// It is split into fields, and the total and idle CPU time are calculated from these fields.
-	line := strings.SplitN(string(data), "\n", 2)[0]
-	fields := strings.Fields(line)
+	var line string = strings.SplitN(string(data), "\n", 2)[0]
+	var fields []string = strings.Fields(line)
+
 	if len(fields) < 5 || fields[0] != "cpu" {
 		return 0, 0, fmt.Errorf("invalid aggregate CPU stats in %s", cpuInfoPath)
 	}

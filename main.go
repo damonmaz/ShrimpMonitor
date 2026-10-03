@@ -10,7 +10,5 @@ func main() {
 
 	fmt.Println("shrimp monitor started")
 
-	for {
-		monitor.StartMonitor()
-	}
+	monitor.StartMonitor()
 }
