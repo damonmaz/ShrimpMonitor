@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"math"
@@ -11,57 +12,154 @@ import (
 	"github.com/damonmaz/shrimp-monitor/lib"
 )
 
-func startCPUMonitor(cpuFilePaths cpuFilePaths) {
-	for {
-		var cpuInfo CPU = getCPUInfo(cpuFilePaths)
-		fmt.Printf("CPU Info: %+v\n", cpuInfo)
-	}
-}
+/////////////////////////////////
+// ** CPU monitor functions ** //
+///////////////////////////////
 
-// Reads the information about the CPU and CPU cores from the files specified in the cpuFilePaths struct. Returns a CPU struct containing the information read from the files.
-func getCPUInfo(cpuFilePaths cpuFilePaths) CPU {
-
+// Create a CPU struct and initialize it with static information about the CPU
+// Returns the initialized CPU struct.
+func initCPUMonitor(operatingSystem string) CPU {
 	var cpu CPU = CPU{}
 
-	// Measure utilization from two /proc/stat snapshots.
-	utilization, err := getCPUUtilization(cpuFilePaths.cpuInfo)
-	if err != nil {
-		cpu.error = err
-		return cpu
+	// Get file paths for monitoring depending on OS
+	switch operatingSystem {
+	case "linux":
+		cpu.cpuFilePaths.cpuStaticPath = "/proc/cpuinfo"           // static CPU info file path
+		cpu.cpuFilePaths.cpuDynamicPath = "/proc/stat"             // dynamic CPU info file path
+		cpu.cpuFilePaths.cpuCoresPath = "/sys/devices/system/cpu/" // default Linux core info file paths
+	default:
+		fmt.Printf("Operating system %s is not supported\n", operatingSystem)
 	}
 
-	cpu.util = math.Round(utilization*100) / 100
+	// Get static CPU info
+	cpu.getCPUStaticInfo()
 
 	return cpu
 }
 
+// Starts the CPU monitoring process
+func startCPUMonitor(cpu *CPU) {
+	// Record an initial baseline; subsequent ticker events produce utilization samples.
+	cpu.getCPUDynamicInfo()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		cpu.getCPUDynamicInfo()
+		fmt.Printf("CPU Info: %+v\n", cpu)
+	}
+}
+
+/////////////////////////////////
+// ** CPU Struct functions ** //
+///////////////////////////////
+
+// Reads the static information about the CPU from the file specified in cpuStaticPath.
+// Populates the CPUStatic struct with the information read from the file.
+func (cpu *CPU) getCPUStaticInfo() {
+	file, err := lib.GetFile(cpu.cpuFilePaths.cpuStaticPath)
+	if err != nil {
+		cpu.error = err
+		return
+	}
+	defer file.Close()
+
+	physicalCores := make(map[string]struct{})
+	physicalIDs := make(map[string]struct{})
+	var fallbackCores uint
+	scanner := bufio.NewScanner(file)
+	var physicalID string
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+
+		// Process the key-value pairs from the CPU info file and populate the CPUStatic struct accordingly.
+		switch key {
+		case "model name":
+			if cpu.cpuStatic.name == "" {
+				cpu.cpuStatic.name = value
+			}
+		case "processor":
+			cpu.cpuStatic.threads++
+		case "physical id":
+			physicalID = value
+			physicalIDs[value] = struct{}{}
+		case "core id":
+			physicalCores[physicalID+":"+value] = struct{}{}
+		case "cpu cores":
+			count, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				cpu.error = err
+				return
+			}
+			if uint(count) > fallbackCores {
+				fallbackCores = uint(count)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		cpu.error = err
+		return
+	}
+
+	// Prefer unique socket/core pairs; fall back to the reported per-socket core count.
+	if len(physicalCores) > 0 {
+		cpu.cpuStatic.cores = uint(len(physicalCores))
+	} else if fallbackCores > 0 {
+		socketCount := len(physicalIDs)
+		if socketCount == 0 {
+			socketCount = 1
+		}
+		cpu.cpuStatic.cores = fallbackCores * uint(socketCount)
+	}
+}
+
+// Reads the dynamic information about the CPU from the files specified in cpuFilePaths.
+func (cpu *CPU) getCPUDynamicInfo() {
+	cpu.cpuDynamic.utilization, cpu.error = getCPUUtilization(cpu.cpuFilePaths.cpuDynamicPath, &cpu.cpuDynamic.cpuUtilSampler)
+}
+
+// //////////////////////////////
+// ** CPU helper functions ** //
+// /////////////////////////////
+
 // Calculates the CPU utilization from the file specified in cpuInfoPath.
 // Returns the CPU utilization as a float64 value and an error if any occurred during the reading process.
-func getCPUUtilization(cpuInfoPath string) (float64, error) {
-	firstTotal, firstIdle, err := readCPUUtilization(cpuInfoPath)
+
+// Calculates utilization from the current counters and the previous sample without waiting.
+func getCPUUtilization(path string, sampler *cpuUtilSampler) (float64, error) {
+	total, idle, err := readCPUUtilization(path)
 	if err != nil {
 		return 0, err
 	}
 
-	// A delay lets the cumulative counters advance so their difference is meaningful.
-	time.Sleep(time.Second)
-
-	secondTotal, secondIdle, err := readCPUUtilization(cpuInfoPath)
-	if err != nil {
-		return 0, err
-	}
-	if secondTotal <= firstTotal {
+	// The first reading is only a baseline, so it cannot produce a delta yet.
+	if !sampler.initialized {
+		sampler.previousTotal = total
+		sampler.previousIdle = idle
+		sampler.initialized = true
 		return 0, nil
 	}
 
-	totalDelta := secondTotal - firstTotal
-	idleDelta := secondIdle - firstIdle
-	return float64(totalDelta-idleDelta) / float64(totalDelta) * 100, nil
+	// Refresh the baseline on every call so the next call measures a new interval.
+	totalDelta := total - sampler.previousTotal
+	idleDelta := idle - sampler.previousIdle
+	sampler.previousTotal = total
+	sampler.previousIdle = idle
+	if totalDelta == 0 {
+		return 0, nil
+	}
+
+	utilization := float64(totalDelta-idleDelta) / float64(totalDelta) * 100
+	return math.Round(utilization*100) / 100, nil
 }
 
 // Reads the CPU statistics from the file specified in cpuInfoPath (/proc/stat). Returns the total and idle CPU time as uint64 values and an error if any occurred during the reading process.
-func readCPUUtilization(cpuInfoPath string) (uint64, uint64, error) {
-	file, err := lib.GetFile(cpuInfoPath)
+func readCPUUtilization(path string) (uint64, uint64, error) {
+	file, err := lib.GetFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -78,7 +176,7 @@ func readCPUUtilization(cpuInfoPath string) (uint64, uint64, error) {
 	var fields []string = strings.Fields(line)
 
 	if len(fields) < 5 || fields[0] != "cpu" {
-		return 0, 0, fmt.Errorf("invalid aggregate CPU stats in %s", cpuInfoPath)
+		return 0, 0, fmt.Errorf("invalid aggregate CPU stats in %s", path)
 	}
 
 	var total uint64
