@@ -43,7 +43,7 @@ func startCPUMonitor(cpu *CPU) {
 	// Record an initial baseline; subsequent ticker events produce utilization samples.
 	cpu.getCPUDynamicInfo()
 
-	ticker := time.NewTicker(TICKER_TIME)
+	ticker := time.NewTicker(lib.TICKER_TIME)
 	defer ticker.Stop()
 
 	// Start a loop that will run every 500 milliseconds to get dynamic CPU info
@@ -152,6 +152,31 @@ func (cpu *CPU) getCPUDynamicInfo() {
 		}
 	}
 	cpu.error = nil
+}
+
+// Copies monitor values into a JSON-friendly snapshot without exposing sampler state.
+func (cpu *CPU) apiSnapshot() cpuSnapshot {
+	cpu.mu.RLock()
+	defer cpu.mu.RUnlock()
+
+	var snapshot cpuSnapshot = cpuSnapshot{
+		Name:         cpu.cpuStatic.name,
+		Cores:        cpu.cpuStatic.cores,
+		Threads:      cpu.cpuStatic.threads,
+		Utilization:  cpu.cpuDynamic.utilization,
+		LogicalCores: make([]cpuCoreSnapshot, 0, len(cpu.cpuDynamic.cores)), // Preallocate slice with capacity equal to the number of logical cores
+	}
+	// Populate the LogicalCores slice with snapshots of each logical core's utilization.
+	for _, core := range cpu.cpuDynamic.cores {
+		snapshot.LogicalCores = append(snapshot.LogicalCores, cpuCoreSnapshot{
+			Label:       core.label,
+			Utilization: core.utilization,
+		})
+	}
+	if cpu.error != nil {
+		snapshot.Error = cpu.error.Error()
+	}
+	return snapshot
 }
 
 // //////////////////////////////////

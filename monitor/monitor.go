@@ -1,7 +1,10 @@
 package monitor
 
 import (
+	"log"
 	"runtime"
+
+	"github.com/damonmaz/shrimp-monitor/api"
 )
 
 func monitorInit() CPU {
@@ -18,7 +21,15 @@ func monitorInit() CPU {
 func StartMonitor() {
 
 	var cpu CPU = monitorInit()
-	startCPUMonitor(&cpu)
+	go startCPUMonitor(&cpu)
+	var err error = api.StartAPICPU(func() any {
+		return cpu.apiSnapshot()
+	})
+
+	if err != nil {
+		log.Printf("CPU API server stopped: %v", err)
+	}
+
 	// Will eventually want to create a thread for each submonitor
 	// startCPUMonitor(locations.cpuFilePaths)
 	// memInfo := getMemInfo(locations.memFilePath)

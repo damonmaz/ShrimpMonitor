@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"sync"
-	"time"
 )
 
 // ** File Paths ** //
@@ -62,5 +61,18 @@ type Monitor struct {
 	mem Memory
 }
 
-// Constants
-var TICKER_TIME = 500 * time.Millisecond
+// ** API Snapshot ** //
+// CPU
+type cpuSnapshot struct {
+	Name         string            `json:"name"`
+	Cores        uint              `json:"cores"`
+	Threads      uint              `json:"threads"`
+	Utilization  float64           `json:"utilization_percent"`
+	LogicalCores []cpuCoreSnapshot `json:"logical_cores"`
+	Error        string            `json:"error,omitempty"`
+}
+
+type cpuCoreSnapshot struct {
+	Label       int     `json:"label"`
+	Utilization float64 `json:"utilization_percent"`
+}
