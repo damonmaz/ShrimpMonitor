@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/damonmaz/shrimp-monitor/lib"
@@ -18,7 +19,7 @@ import (
 // Create a CPU struct and initialize it with static information about the CPU
 // Returns the initialized CPU struct.
 func initCPUMonitor(operatingSystem string) CPU {
-	var cpu CPU = CPU{}
+	var cpu CPU = CPU{mu: &sync.RWMutex{}}
 
 	// Get file paths for monitoring depending on OS
 	switch operatingSystem {
@@ -130,6 +131,9 @@ func (cpu *CPU) getCPUStaticInfo() {
 
 // Reads the dynamic information about the CPU from the files specified in cpuFilePaths.
 func (cpu *CPU) getCPUDynamicInfo() {
+	cpu.mu.Lock()
+	defer cpu.mu.Unlock()
+
 	var path string = cpu.cpuFilePaths.cpuDynamicPath
 	var err error
 	cpu.cpuDynamic.utilization, err = getCPUUtilization(path, &cpu.cpuDynamic.cpuUtilSampler)

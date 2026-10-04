@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type memFilePaths struct {
 // ** Monitor Data ** //
 // CPU
 type CPU struct {
+	mu           *sync.RWMutex
 	cpuFilePaths cpuFilePaths
 	cpuStatic    cpuStatic
 	cpuDynamic   cpuDynamic
