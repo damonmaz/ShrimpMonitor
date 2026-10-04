@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// StartAPICPU serves the latest CPU values as JSON from http://localhost:8080/api/cpu.
+// Starts the API server and sets up the endpoints for monitoring.
 func StartAPI(cpuSnapshot func() any, memSnapshot func() any) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/cpu", jsonEndpointGET(cpuSnapshot))
