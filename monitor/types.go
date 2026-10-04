@@ -13,6 +13,7 @@ type cpuFilePaths struct {
 }
 
 type memFilePaths struct {
+	memPath string
 }
 
 // ** Monitor Data ** //
@@ -53,7 +54,12 @@ type cpuUtilSampler struct {
 
 // Memory
 type Memory struct {
-	error error
+	mu           *sync.RWMutex
+	memFilePaths memFilePaths
+	totalMB      uint64
+	usedMB       uint64
+	availableMB  uint64
+	error        error
 }
 
 type Monitor struct {
@@ -75,4 +81,12 @@ type cpuSnapshot struct {
 type cpuCoreSnapshot struct {
 	Label       int     `json:"label"`
 	Utilization float64 `json:"utilization_percent"`
+}
+
+// Memory
+type memSnapshot struct {
+	Total     uint64 `json:"total"`
+	Used      uint64 `json:"used"`
+	Available uint64 `json:"available"`
+	Error     string `json:"error,omitempty"`
 }

@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/damonmaz/shrimp-monitor/lib"
 )
@@ -43,14 +42,10 @@ func startCPUMonitor(cpu *CPU) {
 	// Record an initial baseline; subsequent ticker events produce utilization samples.
 	cpu.getCPUDynamicInfo()
 
-	ticker := time.NewTicker(lib.TICKER_TIME)
-	defer ticker.Stop()
-
-	// Start a loop that will run every 500 milliseconds to get dynamic CPU info
-	for range ticker.C {
+	lib.Ticker(func() any {
 		cpu.getCPUDynamicInfo()
-		fmt.Printf("CPU Info: %+v\n", cpu)
-	}
+		return nil
+	})
 }
 
 /////////////////////////////////
@@ -67,6 +62,7 @@ func (cpu *CPU) getCPUStaticInfo() {
 	}
 	defer file.Close()
 
+	// Create maps to track unique physical cores and physical IDs, and a variable for fallback core count.
 	physicalCores := make(map[string]struct{})
 	physicalIDs := make(map[string]struct{})
 	var fallbackCores uint

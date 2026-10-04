@@ -1,37 +1,40 @@
 package monitor
 
 import (
+	"fmt"
 	"log"
 	"runtime"
 
 	"github.com/damonmaz/shrimp-monitor/api"
 )
 
-func monitorInit() CPU {
+func monitorInit() (CPU, Memory) {
 
 	var operatingSystem string = runtime.GOOS
 
 	var cpu CPU = initCPUMonitor(operatingSystem)
+	var mem Memory = initMemMonitor(operatingSystem)
 
-	return cpu
+	return cpu, mem
 
 }
 
 // Starts the monitoring process by initializing monitor and calls submonitors (CPU, Memory, etc.)
 func StartMonitor() {
 
-	var cpu CPU = monitorInit()
+	cpu, mem := monitorInit()
 	go startCPUMonitor(&cpu)
-	var err error = api.StartAPICPU(func() any {
-		return cpu.apiSnapshot()
-	})
+	go startMemMonitor(&mem)
+	fmt.Println("monitors started")
 
-	if err != nil {
-		log.Printf("CPU API server stopped: %v", err)
+	var errCPU error = api.StartAPI(
+		func() any {
+			return cpu.apiSnapshot()
+		}, func() any {
+			return mem.apiSnapshot()
+		})
+
+	if errCPU != nil {
+		log.Printf("CPU API server stopped: %v", errCPU)
 	}
-
-	// Will eventually want to create a thread for each submonitor
-	// startCPUMonitor(locations.cpuFilePaths)
-	// memInfo := getMemInfo(locations.memFilePath)
-
 }
